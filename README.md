@@ -44,6 +44,7 @@ docker-compose up
 
 Feel free to send any questions/feedback to: [Zhe Wang](mailto:cezhewang@ust.hk) 
 
-# Citation
+# Publication
 
-If you use our code, please cite us as follows:
+## To cite, please use:
+Wu, S., Zheng, W., Wang, Z., Chen, G., Yang, P., Yue, S., Li, D. and Wu, Y., 2025. AlphaDataCenterCooling: A virtual testbed for evaluating operational strategies in data center cooling plants. *Applied Energy*, 380, p.125100.
