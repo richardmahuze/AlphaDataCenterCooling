@@ -1,0 +1,120 @@
+# AlphaDataCenterCooling Container: Usage Guide
+
+## Key Directory Structure
+
+### Host Machine (Project Root: /home/ram552/dataCenters/AlphaDataCenterCooling/)
+├── AlphaDataCenterCooling_Gym/     # Gymnasium environment interface
+│   ├── alphaDataCenterCoolingEnv.py  # Main gym environment
+│   ├── environment.yml               # Conda dependencies
+│   └── reward_function.py            # Reward calculation logic
+├── Resources/                      # Critical simulation data
+│   ├── AlphaDataCenterCooling_FMU.fmu  # Modelica cooling system model (4MB)
+│   ├── Disturbance.csv               # Weather/boundary conditions (3.4MB)
+│   ├── Initialization_actions.csv    # System startup data (28MB)
+│   ├── mlp.pth                      # PyTorch neural network model
+│   └── version.txt                  # Environment version
+├── testing/                        # Jupyter notebooks for API testing
+├── docs/                          # Documentation and figures
+├── docker-compose.yml             # Container orchestration
+├── Dockerfile                     # Container build instructions
+├── restapi.py                     # Flask REST API server
+├── testcase.py                    # Core simulation logic
+└── config.py                     # Configuration settings
+
+### Inside Container (/home/user/)
+├── Resources/                     # Mounted simulation data
+├── miniconda/                     # Conda environment
+├── restapi.py                     # Flask API server
+├── testcase.py                    # Simulation controller
+├── config.py                     # Runtime configuration
+└── utils.py                      # Helper functions (MLP class)
+
+## Essential Commands
+
+### Container Management
+# Start the data center cooling system
+docker-compose up -d
+
+# Check container status
+docker-compose ps
+
+# View container logs
+docker-compose logs
+docker-compose logs -f              # Follow logs real-time
+
+# Stop the system
+docker-compose down
+
+# Restart containers
+docker-compose restart
+
+# Rebuild after code changes
+docker-compose up -d --build
+
+### REST API Usage
+# Base URL: http://localhost:5000
+
+# Get system information
+curl http://localhost:5000/version      # System version
+curl http://localhost:5000/name         # Test case name
+
+# Get available sensors/controls
+curl http://localhost:5000/measurements # All 74 sensor measurements
+curl http://localhost:5000/inputs       # Available control inputs
+
+# Simulation control
+curl -X POST http://localhost:5000/initialize  # Reset simulation
+curl -X POST http://localhost:5000/step        # Advance one timestep
+curl -X POST http://localhost:5000/advance     # Advance with controls
+
+# Get simulation results
+curl http://localhost:5000/results      # Current performance metrics
+
+### Container Interaction
+# Access container shell
+docker exec -it alphadatacentercooling-alphaDataCenterCooling-1 /bin/bash
+
+# Execute commands in container
+docker exec alphadatacentercooling-alphaDataCenterCooling-1 python -c "import torch; print(torch.__version__)"
+
+# Copy files to/from container
+docker cp file.py alphadatacentercooling-alphaDataCenterCooling-1:/home/user/
+docker cp alphadatacentercooling-alphaDataCenterCooling-1:/home/user/logs.txt ./
+
+### System Monitoring
+# Resource usage
+docker stats
+docker system df                    # Disk usage
+
+# Health checks
+curl -f http://localhost:5000/version || echo "API Down"
+
+# Container logs with filters
+docker-compose logs --tail=50       # Last 50 lines
+docker-compose logs | grep ERROR    # Error messages only
+
+## Key Files for Development
+- testcase.py - Core simulation logic, FMU interface, PyTorch model
+- restapi.py - Flask REST API endpoints
+- Resources/AlphaDataCenterCooling_FMU.fmu - Modelica cooling system model
+- AlphaDataCenterCooling_Gym/alphaDataCenterCoolingEnv.py - Gymnasium environment
+- testing/test_REST_API.ipynb - Example usage notebook
+
+## Configuration
+- Port: 5000 (mapped to 127.0.0.1:5000)
+- Health Check: /version endpoint every 30s
+- Environment: Python 3.10 with PyTorch, PyFMI, Flask
+- Data: 36MB of simulation data in /Resources
+
+## Quick Start
+1. Navigate to project directory: cd /home/ram552/dataCenters/AlphaDataCenterCooling/
+2. Start the system: docker-compose up -d
+3. Verify it's running: curl http://localhost:5000/version
+4. Use the REST API or Jupyter notebooks for interaction
+5. Stop when done: docker-compose down
+
+## Rebuilding Guide
+- NO rebuild needed for normal usage - container is already built and functional
+- Rebuild ONLY if you modify Python code (testcase.py, restapi.py, etc.)
+- For code changes: docker-compose up -d --build
+- For dependency changes: Modify environment.yml then rebuild

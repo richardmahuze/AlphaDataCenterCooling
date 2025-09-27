@@ -1,16 +1,28 @@
-version: "3.7"
-
 services:
   alphaDataCenterCooling:
     image: datacenter
     build:
       context: .
+      dockerfile: Dockerfile
     volumes:
       - ./restapi.py:${APP_PATH}/restapi.py
       - ./testcase.py:${APP_PATH}/testcase.py
       - ./config.py:${APP_PATH}/config.py
       - ./utils.py:${APP_PATH}/utils.py
-      - ./Resources:${APP_PATH}/Resources/     
+      - ./Resources:${APP_PATH}/Resources/
       - ./Resources/AlphaDataCenterCooling_FMU.fmu:${APP_PATH}/Resources/AlphaDataCenterCooling_FMU.fmu
     ports:
-      - 127.0.0.1:5000:5000
+      - "127.0.0.1:5000:5000"
+    networks:
+      - datacenter-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/version"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    restart: unless-stopped
+
+networks:
+  datacenter-network:
+    driver: bridge

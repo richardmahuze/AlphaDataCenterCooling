@@ -4,7 +4,14 @@ This module defines the API to the test case used by the REST requests to
 perform functions such as advancing the simulation, retreiving test case 
 information, and calculating and reporting results.
 """
-from pyfmi import load_fmu
+try:
+    from fmpy import simulate_fmu, dump
+    from fmpy.model_description import read_model_description, DefaultExperiment
+    FMPY_AVAILABLE = True
+except ImportError:
+    # Fallback to PyFMI if FMPy is not available
+    from pyfmi import load_fmu
+    FMPY_AVAILABLE = False
 import numpy as np
 import pandas as pd
 import copy
@@ -32,44 +39,75 @@ class TestCase(object):
         self.fmupath = con['fmupath']
 
         # Load FMU
-        self.fmu = load_fmu(self.fmupath)
-        self.fmu.set_log_level(7)
-        self.fmu.reset()
         self.name = con['name']
         self.step = con['step']
 
-        # Get version
-        fmu_version = self.fmu.get_version()
+        if FMPY_AVAILABLE:
+            # Use FMPy
+            self.model_description = read_model_description(self.fmupath)
+            fmu_version = self.model_description.fmiVersion
 
-        # Get available control inputs and outputs
-        if fmu_version == '2.0':
-            self.input_names=list(self.fmu.get_model_variables(causality=2).keys())
-            self.output_names=list(self.fmu.get_model_variables(causality=3).keys())
+            # Get available control inputs and outputs
+            if fmu_version == '2.0':
+                self.input_names = [v.name for v in self.model_description.modelVariables if v.causality == 'input']
+                self.output_names = [v.name for v in self.model_description.modelVariables if v.causality == 'output']
+            else:
+                raise ValueError('FMU must be version 2.0.')
+
+            # Store FMU path for simulation calls
+            self.fmu = None  # FMPy doesn't use persistent FMU objects
+
         else:
-            raise ValueError('FMU must be version 2.0.')
+            # Fallback to PyFMI
+            self.fmu = load_fmu(self.fmupath)
+            self.fmu.set_log_level(7)
+            self.fmu.reset()
+
+            # Get version
+            fmu_version = self.fmu.get_version()
+
+            # Get available control inputs and outputs
+            if fmu_version == '2.0':
+                self.input_names=list(self.fmu.get_model_variables(causality=2).keys())
+                self.output_names=list(self.fmu.get_model_variables(causality=3).keys())
+            else:
+                raise ValueError('FMU must be version 2.0.')
 
 
 
         # options['CVode_options']['rtol'] = 1e-6
-        self.options = self.fmu.simulate_options()
-        self.options['filter'] = self.output_names + self.input_names
+        if FMPY_AVAILABLE:
+            # FMPy doesn't have simulate_options, we'll set options directly during simulate calls
+            self.options = {
+                'filter': self.output_names + self.input_names,
+                'solver': 'CVode',
+                'rtol': 1e-6,
+                'atol': 1e-6
+            }
+        else:
+            self.options = self.fmu.simulate_options()
+            self.options['filter'] = self.output_names + self.input_names
 
         # Set initial simulation start
         start_time = 0
         self.start_time = start_time
         self.final_time = start_time
         self.initialize_fmu = True
-        self.options['initialize'] = self.initialize_fmu
-        self.options['CVode_options']['rtol'] = 0.001
-        self.options['CVode_options']['atol'] = 0.001
-        self.options['ncp'] = 5
+        if FMPY_AVAILABLE:
+            # FMPy doesn't need these PyFMI-specific option structures
+            pass
+        else:
+            self.options['initialize'] = self.initialize_fmu
+            self.options['CVode_options']['rtol'] = 0.001
+            self.options['CVode_options']['atol'] = 0.001
+            self.options['ncp'] = 5
         self.sim_interval=300
         # Load disturbance data
         self.disturbance_data=pd.read_csv('Resources/Disturbance.csv',index_col=0)
         self.disturbance_var=['Twb_outside','Mchw','Tchw_r']
         self.initialization_actions=pd.read_csv('Resources/Initialization_actions.csv',index_col='time')
         self.initialization_obs0 = pd.read_csv('Resources/Initialization_observation0.csv')
-        self.mlp_model=torch.load('Resources/mlp.pth')
+        self.mlp_model=torch.load('Resources/mlp.pth', weights_only=False)
 
 
 
@@ -97,9 +135,15 @@ class TestCase(object):
         self.input_names_without_distubance=list(set(self.input_names) - set(self.disturbance_var))
         if 'Head_required' in self.input_names_without_distubance:
             self.input_names_without_distubance.remove('Head_required')
-        self.inputs_metadata = self._get_var_metadata(self.fmu, self.input_names_without_distubance, inputs=True)
+        if FMPY_AVAILABLE:
+            self.inputs_metadata = self._get_var_metadata(self.model_description, self.input_names_without_distubance, inputs=True)
+        else:
+            self.inputs_metadata = self._get_var_metadata(self.fmu, self.input_names_without_distubance, inputs=True)
 
-        self.outputs_metadata = self._get_var_metadata(self.fmu, self.output_names)
+        if FMPY_AVAILABLE:
+            self.outputs_metadata = self._get_var_metadata(self.model_description, self.output_names)
+        else:
+            self.outputs_metadata = self._get_var_metadata(self.fmu, self.output_names)
 
         self.y = {'time': []}
         for key in self.output_names:
@@ -145,7 +189,9 @@ class TestCase(object):
         status = 200
         payload = None
         # Reset fmu
-        self.fmu.reset()
+        if not FMPY_AVAILABLE:
+            # Only PyFMI has reset method
+            self.fmu.reset()
         # Reset simulation data storage
         self.__initilize_data()
         # Check if the inputs are valid
@@ -235,11 +281,46 @@ class TestCase(object):
                     u_trajectory = np.vstack((u_trajectory, value))
 
             input_object = (u_list, np.transpose(u_trajectory))
-            self.options['initialize'] = self.initialize_fmu
-            res = self.fmu.simulate(start_time=init_t1,
-                                    final_time=init_t1+300,
-                                    options=self.options,
-                                    input=input_object)
+            if FMPY_AVAILABLE:
+                # Convert tuple to structured array for FMPy
+                if input_object is not None:
+                    u_names, u_data = input_object
+                    # Create structured array with time as first column
+                    time_col = u_data[:, 0] if u_data.shape[1] > 0 else np.array([])
+
+                    # Build dtype for structured array
+                    dtype_list = [('time', 'f8')]
+                    for name in u_names:
+                        if name != 'time':
+                            dtype_list.append((name, 'f8'))
+
+                    # Create structured array
+                    fmpy_input = np.zeros(len(time_col), dtype=dtype_list)
+                    fmpy_input['time'] = time_col
+                    for i, name in enumerate(u_names):
+                        if name != 'time':
+                            fmpy_input[name] = u_data[:, i]
+                else:
+                    fmpy_input = None
+
+                # Use FMPy simulate_fmu
+                res = simulate_fmu(
+                    filename=self.fmupath,
+                    start_time=init_t1,
+                    stop_time=init_t1+300,
+                    output_interval=(init_t1+300-init_t1)/100,  # 100 output points
+                    input=fmpy_input,
+                    output=self.options['filter'],
+                    solver=self.options.get('solver', 'CVode'),
+                    relative_tolerance=self.options.get('rtol', 1e-6),
+                    reset=self.initialize_fmu
+                )
+            else:
+                self.options['initialize'] = self.initialize_fmu
+                res = self.fmu.simulate(start_time=init_t1,
+                                        final_time=init_t1+300,
+                                        options=self.options,
+                                        input=input_object)
             self.initialize_fmu = False
         if not isinstance(res, str):
 
@@ -337,9 +418,10 @@ class TestCase(object):
         # Simulate
         # print input_object
         status = 200
-        chiller_count = u['CHI01'] + u['CHI02'] + u['CHI03'] + u['CHI04'] + u['CHI05'] + u['CHI06']
-        heat_exchanger_count = u['CHI01_CW3'] + u['CHI02_CW3'] + u['CHI03_CW3'] + u['CHI04_CW3'] + u['CHI05_CW3'] + u['CHI06_CW3']
-        cooling_tower_valve_count = (u['U_CT1'] + u['U_CT2'] + u['U_CT3'] + u['U_CT4'] + u['U_CT5'] + u['U_CT6']) * 2
+        # Handle None values by treating them as 0 (OFF/CLOSED)
+        chiller_count = (u.get('CHI01', 0) or 0) + (u.get('CHI02', 0) or 0) + (u.get('CHI03', 0) or 0) + (u.get('CHI04', 0) or 0) + (u.get('CHI05', 0) or 0) + (u.get('CHI06', 0) or 0)
+        heat_exchanger_count = (u.get('CHI01_CW3', 0) or 0) + (u.get('CHI02_CW3', 0) or 0) + (u.get('CHI03_CW3', 0) or 0) + (u.get('CHI04_CW3', 0) or 0) + (u.get('CHI05_CW3', 0) or 0) + (u.get('CHI06_CW3', 0) or 0)
+        cooling_tower_valve_count = ((u.get('U_CT1', 0) or 0) + (u.get('U_CT2', 0) or 0) + (u.get('U_CT3', 0) or 0) + (u.get('U_CT4', 0) or 0) + (u.get('U_CT5', 0) or 0) + (u.get('U_CT6', 0) or 0)) * 2
 
         iteration_num= math.ceil(self.step / self.sim_interval)
         for i in range(iteration_num):
@@ -349,6 +431,12 @@ class TestCase(object):
                 self.final_time_itr = self.start_time+self.sim_interval * (i + 1)
             else:
                 self.final_time_itr = self.start_time + self.step
+
+            # Initialize variables with default values
+            Tchws_set_CHI = 286.55  # Default chilled water supply temperature setpoint (K)
+            Mchw = None  # Will be set from disturbance data
+            Tchw_r = None  # Will be set from disturbance data
+
             # Set control inputs if they exist
             if u.keys():
                 u_list = []
@@ -396,24 +484,72 @@ class TestCase(object):
             else:
                 input_object = None
 
-            try:
-                res = self.fmu.simulate(start_time=self.start_time_itr,
-                                        final_time=self.final_time_itr,
-                                        options=self.options,
-                                        input=input_object)
-            except Exception as e:
+            # Convert input for FMPy if needed
+            if FMPY_AVAILABLE and input_object is not None:
+                u_names, u_data = input_object
+                # Create structured array with time as first column
+                time_col = u_data[:, 0] if u_data.shape[1] > 0 else np.array([])
 
-                self.fmu = load_fmu(self.fmupath)
-                self.fmu.set_log_level(7)
-                self.fmu.reset()
-                self.options['CVode_options']['rtol'] = 0.001
-                self.options['CVode_options']['atol'] = 0.001
-                self.options['ncp'] = 5
-                self.options['initialize'] = True
-                res = self.fmu.simulate(start_time=self.start_time_itr,
-                                        final_time=self.final_time_itr,
-                                        options=self.options,
-                                        input=input_object)
+                # Build dtype for structured array
+                dtype_list = [('time', 'f8')]
+                for name in u_names:
+                    if name != 'time':
+                        dtype_list.append((name, 'f8'))
+
+                # Create structured array
+                fmpy_input = np.zeros(len(time_col), dtype=dtype_list)
+                fmpy_input['time'] = time_col
+                for i, name in enumerate(u_names):
+                    if name != 'time':
+                        fmpy_input[name] = u_data[:, i]
+            else:
+                fmpy_input = input_object if not FMPY_AVAILABLE else None
+
+            try:
+                if FMPY_AVAILABLE:
+                    # Use FMPy simulate_fmu
+                    res = simulate_fmu(
+                        filename=self.fmupath,
+                        start_time=self.start_time_itr,
+                        stop_time=self.final_time_itr,
+                        output_interval=(self.final_time_itr-self.start_time_itr)/100,
+                        input=fmpy_input,
+                        output=self.options['filter'],
+                        solver=self.options.get('solver', 'CVode'),
+                        relative_tolerance=self.options.get('rtol', 1e-6)
+                    )
+                else:
+                    res = self.fmu.simulate(start_time=self.start_time_itr,
+                                            final_time=self.final_time_itr,
+                                            options=self.options,
+                                            input=input_object)
+            except Exception as e:
+                if not FMPY_AVAILABLE:
+                    self.fmu = load_fmu(self.fmupath)
+                    self.fmu.set_log_level(7)
+                    self.fmu.reset()
+                if FMPY_AVAILABLE:
+                    # For FMPy, use relaxed tolerances in retry
+                    res = simulate_fmu(
+                        filename=self.fmupath,
+                        start_time=self.start_time_itr,
+                        stop_time=self.final_time_itr,
+                        output_interval=(self.final_time_itr-self.start_time_itr)/5,  # ncp=5 equivalent
+                        input=fmpy_input,
+                        output=self.options['filter'],
+                        solver='CVode',
+                        relative_tolerance=0.001,
+                        initialize=True
+                    )
+                else:
+                    self.options['CVode_options']['rtol'] = 0.001
+                    self.options['CVode_options']['atol'] = 0.001
+                    self.options['ncp'] = 5
+                    self.options['initialize'] = True
+                    res = self.fmu.simulate(start_time=self.start_time_itr,
+                                            final_time=self.final_time_itr,
+                                            options=self.options,
+                                            input=input_object)
 
             self.initialize_fmu = False
             self.P_chillers_sum=res['Pchi1'][-1]+res['Pchi2'][-1]+res['Pchi3'][-1]+res['Pchi4'][-1]+res['Pchi5'][-1]+res['Pchi6'][-1]
@@ -772,12 +908,24 @@ class TestCase(object):
                 maxi = None
             elif '_activate' in var:
                 unit = None
-                description = fmu.get_variable_description(var)
+                if FMPY_AVAILABLE and hasattr(fmu, 'modelVariables'):
+                    # FMPy model description
+                    var_obj = next((v for v in fmu.modelVariables if v.name == var), None)
+                    description = var_obj.description if var_obj and var_obj.description else var
+                else:
+                    # PyFMI fmu object
+                    description = fmu.get_variable_description(var)
                 mini = None
                 maxi = None
             else:
                 unit = None
-                description = fmu.get_variable_description(var)
+                if FMPY_AVAILABLE and hasattr(fmu, 'modelVariables'):
+                    # FMPy model description
+                    var_obj = next((v for v in fmu.modelVariables if v.name == var), None)
+                    description = var_obj.description if var_obj and var_obj.description else var
+                else:
+                    # PyFMI fmu object
+                    description = fmu.get_variable_description(var)
 
                 if inputs:
                     mini = None

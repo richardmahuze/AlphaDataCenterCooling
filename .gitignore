@@ -1,0 +1,22 @@
+# Virtual environments
+test_env/
+venv/
+env/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# IDE
+.vscode/
+.idea/
+
+# Test outputs
+*.log
+
+# Temporary files
+*.tmp
+*~
