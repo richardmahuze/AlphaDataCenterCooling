@@ -69,7 +69,13 @@ class TestCase(object):
         self.disturbance_var=['Twb_outside','Mchw','Tchw_r']
         self.initialization_actions=pd.read_csv('Resources/Initialization_actions.csv',index_col='time')
         self.initialization_obs0 = pd.read_csv('Resources/Initialization_observation0.csv')
-        self.mlp_model=torch.load('Resources/mlp.pth')
+        # Load MLP model checkpoint (torch 2.6 defaults to weights_only=True)
+        # Use weights_only=False to allow full unpickling of a trusted checkpoint.
+        try:
+            self.mlp_model = torch.load('Resources/mlp.pth', map_location='cpu', weights_only=False)
+        except TypeError:
+            # Fallback for older torch versions without weights_only argument
+            self.mlp_model = torch.load('Resources/mlp.pth', map_location='cpu')
 
 
 
@@ -845,5 +851,4 @@ class TestCase(object):
             self.u[key] = res[key][-1]
             if store:
                 self.u_store[key].append(res[key][-1])
-
 
