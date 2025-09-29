@@ -31,8 +31,11 @@ class TestCase(object):
         con = config.get_config()
         self.fmupath = con['fmupath']
 
-        # Load FMU
-        self.fmu = load_fmu(self.fmupath)
+        # Load FMU. Prefer Co-Simulation (CS) to avoid Assimulo binary deps; fall back to ME.
+        try:
+            self.fmu = load_fmu(self.fmupath, kind='CS')
+        except Exception:
+            self.fmu = load_fmu(self.fmupath)
         self.fmu.set_log_level(7)
         self.fmu.reset()
         self.name = con['name']
@@ -60,9 +63,12 @@ class TestCase(object):
         self.final_time = start_time
         self.initialize_fmu = True
         self.options['initialize'] = self.initialize_fmu
-        self.options['CVode_options']['rtol'] = 0.001
-        self.options['CVode_options']['atol'] = 0.001
-        self.options['ncp'] = 5
+        # Set solver options if available for this FMU kind
+        if 'CVode_options' in self.options:
+            self.options['CVode_options']['rtol'] = 0.001
+            self.options['CVode_options']['atol'] = 0.001
+        if 'ncp' in self.options:
+            self.options['ncp'] = 5
         self.sim_interval=300
         # Load disturbance data
         self.disturbance_data=pd.read_csv('Resources/Disturbance.csv',index_col=0)
@@ -409,12 +415,20 @@ class TestCase(object):
                                         input=input_object)
             except Exception as e:
 
-                self.fmu = load_fmu(self.fmupath)
+                # Re-create FMU (prefer CS, fallback to ME)
+                try:
+                    self.fmu = load_fmu(self.fmupath, kind='CS')
+                except Exception:
+                    self.fmu = load_fmu(self.fmupath)
                 self.fmu.set_log_level(7)
                 self.fmu.reset()
-                self.options['CVode_options']['rtol'] = 0.001
-                self.options['CVode_options']['atol'] = 0.001
-                self.options['ncp'] = 5
+                # Reset options defensively
+                self.options = self.fmu.simulate_options()
+                if 'CVode_options' in self.options:
+                    self.options['CVode_options']['rtol'] = 0.001
+                    self.options['CVode_options']['atol'] = 0.001
+                if 'ncp' in self.options:
+                    self.options['ncp'] = 5
                 self.options['initialize'] = True
                 res = self.fmu.simulate(start_time=self.start_time_itr,
                                         final_time=self.final_time_itr,
@@ -851,4 +865,3 @@ class TestCase(object):
             self.u[key] = res[key][-1]
             if store:
                 self.u_store[key].append(res[key][-1])
-
