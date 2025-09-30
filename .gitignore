@@ -49,3 +49,9 @@ Thumbs.db
 
 # Docker
 .dockerignore
+
+# Generated test artifacts
+testing/*.png
+testing/api_metadata.txt
+testing/test_results.txt
+testing/Pumps_P_Pyfmi_mlp_restapi.csv
