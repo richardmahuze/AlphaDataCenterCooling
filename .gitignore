@@ -55,3 +55,6 @@ testing/*.png
 testing/api_metadata.txt
 testing/test_results.txt
 testing/Pumps_P_Pyfmi_mlp_restapi.csv
+
+# Scripts directory (weather data fetching tools)
+scripts/
